@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="sr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Moja bibliotečica</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+:root{font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#243047;background:#f4f6fa}
+*{box-sizing:border-box}body{margin:0}header{background:#344b72;color:white;padding:24px 18px}
+header h1{margin:0;font-size:27px}header p{margin:6px 0 0;color:#e2e9f5}
+main{max-width:980px;margin:24px auto;padding:0 14px}.panel{background:white;border:1px solid #e1e6ef;border-radius:14px;padding:18px;margin-bottom:16px;box-shadow:0 2px 8px #182b4610}
+h2{font-size:19px;margin:0 0 14px}.muted{color:#64748b;font-size:14px}
+input,select,button{font:inherit;padding:11px;border:1px solid #ccd5e2;border-radius:8px}
+input,select{width:100%;background:white}button{background:#344b72;color:white;border:0;cursor:pointer;font-weight:600}button.secondary{background:#e9eef6;color:#263b5c}
+button:disabled{opacity:.55;cursor:wait}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}
+.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.hidden{display:none!important}
+table{width:100%;border-collapse:collapse;margin-top:12px}th,td{text-align:left;padding:10px 8px;border-bottom:1px solid #e8edf3;font-size:14px}th{color:#52627a}
+.status{padding:10px;border-radius:8px;background:#eef3fa;margin:10px 0;font-size:14px}.error{background:#fff0ef;color:#9c2f26}.success{background:#edf8f0;color:#22643a}
+.search{max-width:400px;margin:8px 0}.topline{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+@media(max-width:600px){header h1{font-size:23px}table{display:block;overflow-x:auto;white-space:nowrap}}
+</style>
+</head>
+<body>
+<header><h1>📚 Moja bibliotečica</h1><p>Evidencija knjiga, traktata, brošura, časopisa i ostalog materijala</p></header>
+<main>
+<div id="notice" class="status">Aplikacija se povezuje sa bazom podataka…</div>
+<section class="panel">
+ <div class="topline"><h2>Stanje zaliha</h2><span id="count" class="muted"></span></div>
+ <input id="search" class="search" placeholder="Pretraži po šifri ili nazivu…" oninput="renderItems()">
+ <div id="itemsArea" class="muted">Učitavanje artikala…</div>
+</section>
+<section class="panel">
+ <h2>Administratorski pristup</h2>
+ <div id="loginArea">
+  <p class="muted">Prijavi se svojim administratorskim emailom i lozinkom da bi dodavao artikle i evidentirao ulaz/izlaz.</p>
+  <div class="grid"><input id="email" type="email" placeholder="Email"><input id="password" type="password" placeholder="Lozinka"></div>
+  <div class="actions"><button onclick="login()">Prijavi se</button></div>
+ </div>
+ <div id="adminArea" class="hidden">
+  <p id="adminLabel" class="muted">Prijavljen administrator.</p>
+  <div class="grid">
+   <input id="code" placeholder="Šifra artikla">
+   <input id="name" placeholder="Naziv artikla">
+   <select id="category"><option>Knjiga</option><option>Traktat</option><option>Brošura</option><option>Časopis</option><option>Ostalo</option></select>
+   <input id="stock" type="number" min="0" step="1" placeholder="Početna količina">
+  </div>
+  <div class="actions"><button onclick="addItem()">Dodaj artikal</button></div>
+  <hr style="border:0;border-top:1px solid #e8edf3;margin:18px 0">
+  <h2>Ulaz / izlaz materijala</h2>
+  <div class="grid">
+   <select id="movementItem"><option value="">Izaberi artikal</option></select>
+   <select id="movementType"><option value="IN">Ulaz</option><option value="OUT">Izlaz</option></select>
+   <input id="quantity" type="number" min="1" step="1" placeholder="Količina">
+   <input id="note" placeholder="Napomena (opciono)">
+  </div>
+  <div class="actions"><button onclick="addMovement()">Sačuvaj promenu</button><button class="secondary" onclick="logout()">Odjavi se</button></div>
+ </div>
+</section>
+<p class="muted">Pregled zaliha je dostupan bez prijave. Samo administrator može menjati podatke.</p>
+</main>
+<script>
+const SUPABASE_URL = "UNESI_PROJECT_URL";
+const SUPABASE_KEY = "UNESI_PUBLISHABLE_KEY";
+let db=null, items=[];
+const $=id=>document.getElementById(id);
+function message(text,type=""){ $("notice").textContent=text; $("notice").className="status "+type; }
+function configured(){return SUPABASE_URL.startsWith("https://") && !SUPABASE_URL.includes("UNESI_") && !SUPABASE_KEY.includes("UNESI_");}
+async function init(){
+ if(!configured()){message("Podešavanje je potrebno: u fajlu index.html zameni UNESI_PROJECT_URL i UNESI_PUBLISHABLE_KEY podacima iz Supabase → Project Settings → API.", "error");$("itemsArea").textContent="Baza još nije povezana.";return;}
+ db=window.supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
+ const {data:{session}}=await db.auth.getSession(); setAdmin(!!session);
+ db.auth.onAuthStateChange((_event,session)=>setAdmin(!!session));
+ await loadItems();
+}
+function setAdmin(on){$("loginArea").classList.toggle("hidden",on);$("adminArea").classList.toggle("hidden",!on);}
+async function loadItems(){
+ const {data,error}=await db.from("items").select("id,code,name,category,stock").order("name");
+ if(error){message("Greška pri učitavanju: "+error.message,"error");return;}
+ items=data||[];renderItems();fillMovementItems();message("Baza je povezana. Pregled zaliha je dostupan.","success");
+}
+function renderItems(){
+ const q=$("search").value.trim().toLocaleLowerCase("sr");
+ const filtered=items.filter(x=>(x.code+" "+x.name+" "+x.category).toLocaleLowerCase("sr").includes(q));
+ $("count").textContent=filtered.length+" artikala";
+ if(!filtered.length){$("itemsArea").innerHTML='<p class="muted">Nema artikala za prikaz.</p>';return;}
+ $("itemsArea").innerHTML='<table><thead><tr><th>Šifra</th><th>Naziv</th><th>Vrsta</th><th>Stanje</th></tr></thead><tbody>'+
+ filtered.map(x=>`<tr><td>${esc(x.code)}</td><td>${esc(x.name)}</td><td>${esc(x.category)}</td><td><b>${x.stock}</b></td></tr>`).join("")+'</tbody></table>';
+}
+function esc(s){return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+function fillMovementItems(){$("movementItem").innerHTML='<option value="">Izaberi artikal</option>'+items.map(x=>`<option value="${x.id}">${esc(x.code)} — ${esc(x.name)} (stanje: ${x.stock})</option>`).join("");}
+async function login(){
+ const {error}=await db.auth.signInWithPassword({email:$("email").value,password:$("password").value});
+ if(error){message("Prijava nije uspela: "+error.message,"error");return;}
+ const {data:{user}}=await db.auth.getUser();
+ const {data:role,error:re}=await db.from("user_roles").select("role").eq("user_id",user.id).maybeSingle();
+ if(re||!role||role.role!=="admin"){await db.auth.signOut();message("Ovaj nalog nema administratorska prava.","error");return;}
+ $("adminLabel").textContent="Prijavljen administrator: "+user.email;setAdmin(true);message("Uspešno ste prijavljeni.","success");await loadItems();
+}
+async function logout(){await db.auth.signOut();setAdmin(false);message("Odjavljeni ste.","success");}
+async function addItem(){
+ const code=$("code").value.trim(),name=$("name").value.trim(),category=$("category").value,stock=Number($("stock").value||0);
+ if(!code||!name||!Number.isInteger(stock)||stock<0){message("Unesi šifru, naziv i ispravnu početnu količinu.","error");return;}
+ const {error}=await db.from("items").insert({code,name,category,stock});
+ if(error){message("Artikal nije dodat: "+error.message,"error");return;}
+ ["code","name","stock"].forEach(id=>$(id).value="");message("Artikal je dodat.","success");await loadItems();
+}
+async function addMovement(){
+ const item_id=$("movementItem").value,type=$("movementType").value,quantity=Number($("quantity").value),note=$("note").value.trim();
+ if(!item_id||!Number.isInteger(quantity)||quantity<1){message("Izaberi artikal i unesi količinu veću od nule.","error");return;}
+ const {error}=await db.from("movements").insert({item_id,movement_type:type,quantity,note:note||null});
+ if(error){message("Promena nije sačuvana: "+error.message,"error");return;}
+ $("quantity").value="";$("note").value="";message("Promena je sačuvana i stanje je ažurirano.","success");await loadItems();
+}
+init();
+</script>
+</body></html>
